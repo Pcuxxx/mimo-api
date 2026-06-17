@@ -1,18 +1,58 @@
+require('dotenv').config();
+
 const express = require('express');
 const cors = require('cors');
 const { spawn, exec } = require('child_process');
 const { v4: uuidv4 } = require('uuid');
+const rateLimit = require('express-rate-limit');
+
+// ── Config ──────────────────────────────────────────────────────────────────
+
+const config = {
+  host: process.env.HOST || '0.0.0.0',
+  port: parseInt(process.env.PORT || '3456', 10),
+  model: process.env.MIMO_MODEL || 'mimo/mimo-auto',
+  apiKey: process.env.API_KEY || '',
+  corsOrigins: (process.env.CORS_ORIGINS || '*').split(',').map((s) => s.trim()),
+  rateLimitWindow: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000', 10),
+  rateLimitMax: parseInt(process.env.RATE_LIMIT_MAX || '60', 10),
+};
+
+// ── App ─────────────────────────────────────────────────────────────────────
 
 const app = express();
-app.use(cors());
 app.use(express.json({ limit: '10mb' }));
+app.use(cors({ origin: config.corsOrigins }));
 
-const PORT = process.env.PORT || 3456;
-const MODEL = process.env.MIMO_MODEL || 'mimo/mimo-auto';
+if (config.rateLimitMax > 0) {
+  app.use(
+    rateLimit({
+      windowMs: config.rateLimitWindow,
+      max: config.rateLimitMax,
+      standardHeaders: true,
+      legacyHeaders: false,
+      message: { error: 'Rate limit exceeded. Try again later.' },
+    }),
+  );
+}
+
+// ── Auth Middleware ──────────────────────────────────────────────────────────
+
+const requireAuth = (req, res, next) => {
+  if (!config.apiKey) return next();
+
+  const key = req.headers['x-api-key'] || req.query.api_key;
+  if (!key || key !== config.apiKey) {
+    return res.status(401).json({ error: 'Unauthorized. Provide X-API-Key header.' });
+  }
+  next();
+};
+
+// ── Mimo Runner ─────────────────────────────────────────────────────────────
 
 const mimoRun = (prompt, opts = {}) =>
   new Promise((resolve, reject) => {
-    const args = ['run', '--format', 'json', '-m', MODEL];
+    const args = ['run', '--format', 'json', '-m', config.model];
     if (opts.session) args.push('-s', opts.session);
     if (opts.continue_session) args.push('-c');
     if (opts.dangerously_skip_permissions) args.push('--dangerously-skip-permissions');
@@ -72,7 +112,8 @@ app.get('/', (_req, res) => {
   res.json({
     name: 'MiMo Code API',
     version: '1.0.0',
-    model: MODEL,
+    model: config.model,
+    auth: config.apiKey ? 'required (X-API-Key)' : 'none',
     endpoints: {
       'POST /chat': 'Send a prompt, receive a response',
       'POST /chat/stream': 'SSE streaming',
@@ -83,17 +124,17 @@ app.get('/', (_req, res) => {
 });
 
 app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', model: MODEL, uptime: process.uptime() });
+  res.json({ status: 'ok', model: config.model, uptime: process.uptime() });
 });
 
-app.get('/models', (_req, res) => {
+app.get('/models', requireAuth, (_req, res) => {
   exec('mimo models', (err, stdout) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json({ models: parseModels(stdout) });
   });
 });
 
-app.post('/chat', async (req, res) => {
+app.post('/chat', requireAuth, async (req, res) => {
   try {
     const { prompt, session, dangerously_skip_permissions } = req.body;
 
@@ -105,7 +146,7 @@ app.post('/chat', async (req, res) => {
 
     res.json({
       id: uuidv4(),
-      model: MODEL,
+      model: config.model,
       response: result.text,
       exitCode: result.exitCode,
       ...(result.stderr && { stderr: result.stderr }),
@@ -115,7 +156,7 @@ app.post('/chat', async (req, res) => {
   }
 });
 
-app.post('/chat/stream', async (req, res) => {
+app.post('/chat/stream', requireAuth, async (req, res) => {
   try {
     const { prompt, session, dangerously_skip_permissions } = req.body;
 
@@ -128,7 +169,7 @@ app.post('/chat/stream', async (req, res) => {
     res.setHeader('Connection', 'keep-alive');
     res.flushHeaders();
 
-    const args = ['run', '--format', 'json', '-m', MODEL];
+    const args = ['run', '--format', 'json', '-m', config.model];
     if (session) args.push('-s', session);
     if (dangerously_skip_permissions) args.push('--dangerously-skip-permissions');
     args.push(prompt);
@@ -171,7 +212,9 @@ app.post('/chat/stream', async (req, res) => {
 
 // ── Start ───────────────────────────────────────────────────────────────────
 
-app.listen(PORT, () => {
-  console.log(`[mimo-api] listening on http://localhost:${PORT}`);
-  console.log(`[mimo-api] model: ${MODEL}`);
+app.listen(config.port, config.host, () => {
+  console.log(`[mimo-api] listening on http://${config.host}:${config.port}`);
+  console.log(`[mimo-api] model: ${config.model}`);
+  console.log(`[mimo-api] auth: ${config.apiKey ? 'enabled' : 'disabled'}`);
+  console.log(`[mimo-api] rate limit: ${config.rateLimitMax} req / ${config.rateLimitWindow / 1000}s`);
 });
