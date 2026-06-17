@@ -1,0 +1,139 @@
+openapi: "3.0.3"
+
+info:
+  title: Mimo Code API
+  description: API for interacting with Mimo Code agent
+  version: "1.0.0"
+
+servers:
+  - url: http://localhost:3456
+
+paths:
+  /:
+    get:
+      summary: API info
+      operationId: getInfo
+      responses:
+        "200":
+          description: API information
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  version:
+                    type: string
+                  model:
+                    type: string
+
+  /health:
+    get:
+      summary: Health check
+      operationId: healthCheck
+      responses:
+        "200":
+          description: Health status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  uptime:
+                    type: number
+
+  /models:
+    get:
+      summary: List models
+      operationId: listModels
+      responses:
+        "200":
+          description: Available models
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  models:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        name:
+                          type: string
+
+  /chat:
+    post:
+      summary: Send prompt, get response
+      operationId: chat
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - prompt
+              properties:
+                prompt:
+                  type: string
+                  description: The prompt to send to the model
+                session:
+                  type: string
+                  description: Optional session identifier for conversation continuity
+                dangerously_skip_permissions:
+                  type: boolean
+                  description: Skip permission checks (use with caution)
+      responses:
+        "200":
+          description: Chat response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  model:
+                    type: string
+                  response:
+                    type: string
+                  exitCode:
+                    type: integer
+                  stderr:
+                    type: string
+
+  /chat/stream:
+    post:
+      summary: Send prompt, get SSE streaming response
+      operationId: chatStream
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - prompt
+              properties:
+                prompt:
+                  type: string
+                  description: The prompt to send to the model
+                session:
+                  type: string
+                  description: Optional session identifier for conversation continuity
+                dangerously_skip_permissions:
+                  type: boolean
+                  description: Skip permission checks (use with caution)
+      responses:
+        "200":
+          description: SSE streaming response
+          content:
+            text/event-stream:
+              schema:
+                type: string
