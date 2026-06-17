@@ -1,53 +1,82 @@
+<div align="center">
+
 # MiMo Code API
 
-REST API обёртка над [MiMo Code CLI](https://github.com/nicepkg/mimocode). Отправляйте промпты через HTTP и получайте ответы от ИИ.
+**REST API обёртка над [MiMo Code CLI](https://github.com/nicepkg/mimocode)**
 
-## Быстрый старт
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Node.js](https://img.shields.io/badge/Node.js-18+-339933?logo=node.js&logoColor=white)](https://nodejs.org)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)]()
+
+Отправляйте промпты через HTTP и получайте ответы от ИИ моделей.
+Идеально для интеграции AI в свои приложения, ботов и автоматизацию.
+
+</div>
+
+---
+
+## Quick Start
 
 ```bash
-git clone <repo-url> && cd mimo-api
+git clone https://github.com/PsiXoPlayer/mimo-api.git
+cd mimo-api
 npm install
-node server.js
+npm start
 ```
 
-Сервер запустится на `http://localhost:3456`.
+Сервер: `http://localhost:3456`
 
-## API
+## API Reference
 
 ### `POST /chat`
+
+Отправить промпт, получить ответ.
 
 ```bash
 curl -X POST http://localhost:3456/chat \
   -H "Content-Type: application/json" \
-  -d '{"prompt": "Привет!"}'
+  -d '{"prompt": "Explain quantum computing in 3 sentences"}'
 ```
 
 **Response:**
+
 ```json
 {
-  "id": "uuid",
+  "id": "a1b2c3d4-...",
   "model": "mimo/mimo-auto",
-  "response": "Привет! Чем могу помочь?",
+  "response": "Quantum computing uses...",
   "exitCode": 0
 }
 ```
 
-**Body параметры:**
-| Поле | Тип | Описание |
-|------|-----|----------|
-| `prompt` | string | **Обязательно.** Текст запроса |
-| `session` | string | ID сессии для продолжения диалога |
-| `dangerously_skip_permissions` | boolean | Авто-разрешение операций |
+**Request Body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `prompt` | `string` | ✅ | Текст запроса |
+| `session` | `string` | — | ID сессии для продолжения диалога |
+| `dangerously_skip_permissions` | `boolean` | — | Авто-разрешение операций (⚠️小心使用) |
+
+---
 
 ### `POST /chat/stream`
 
-SSE стриминг — ответ приходит по частям.
+SSE стриминг — ответ поступает по частям в реальном времени.
 
 ```bash
 curl -N -X POST http://localhost:3456/chat/stream \
   -H "Content-Type: application/json" \
-  -d '{"prompt": "Расскажи анекдот"}'
+  -d '{"prompt": "Write a haiku about coding"}'
 ```
+
+**Event format:**
+
+```
+data: {"type":"text","part":{"text":"..."}}
+data: {"type":"done","exitCode":0}
+```
+
+---
 
 ### `GET /models`
 
@@ -55,22 +84,44 @@ curl -N -X POST http://localhost:3456/chat/stream \
 curl http://localhost:3456/models
 ```
 
+```json
+{
+  "models": [
+    "mimo/mimo-auto",
+    "anthropic/claude-sonnet-4-5",
+    "xiaomi/mimo-v2.5-pro",
+    ...
+  ]
+}
+```
+
+---
+
 ### `GET /health`
 
 ```bash
 curl http://localhost:3456/health
 ```
 
-## Примеры
+```json
+{
+  "status": "ok",
+  "model": "mimo/mimo-auto",
+  "uptime": 142.5
+}
+```
 
-### Node.js
+## Examples
 
-```js
-const res = await fetch('http://localhost:3456/chat', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ prompt: 'Напиши hello world на Python' })
+### JavaScript
+
+```javascript
+const res = await fetch("http://localhost:3456/chat", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ prompt: "Hello, world!" }),
 });
+
 const { response } = await res.json();
 console.log(response);
 ```
@@ -80,26 +131,34 @@ console.log(response);
 ```python
 import requests
 
-r = requests.post('http://localhost:3456/chat', json={"prompt": "Привет"})
+r = requests.post(
+    "http://localhost:3456/chat",
+    json={"prompt": "Hello, world!"}
+)
 print(r.json()["response"])
 ```
 
-## Переменные окружения
+### cURL
 
-| Переменная | По умолчанию | Описание |
-|------------|--------------|----------|
-| `PORT` | `3456` | Порт сервера |
-| `MIMO_MODEL` | `mimo/mimo-auto` | Модель для запросов |
-
-## Запуск/остановка
-
-```powershell
-.\start.ps1   # запустить
-.\stop.ps1    # остановить
+```bash
+curl -s -X POST http://localhost:3456/chat \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"Hello!"}' | jq .response
 ```
 
-## Требования
+## Configuration
 
-- Node.js 18+
-- MiMo Code CLI (`npm i -g @mimo-ai/cli`)
-- Настроенный провайдер (`mimo providers`)
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `3456` | Порт сервера |
+| `MIMO_MODEL` | `mimo/mimo-auto` | Модель по умолчанию |
+
+## Requirements
+
+- **Node.js** 18+
+- **MiMo Code CLI** — `npm i -g @mimo-ai/cli`
+- **Настроенный провайдер** — `mimo providers`
+
+## License
+
+[MIT](LICENSE)

@@ -10,8 +10,8 @@ app.use(express.json({ limit: '10mb' }));
 const PORT = process.env.PORT || 3456;
 const MODEL = process.env.MIMO_MODEL || 'mimo/mimo-auto';
 
-function mimoRun(prompt, opts = {}) {
-  return new Promise((resolve, reject) => {
+const mimoRun = (prompt, opts = {}) =>
+  new Promise((resolve, reject) => {
     const args = ['run', '--format', 'json', '-m', MODEL];
     if (opts.session) args.push('-s', opts.session);
     if (opts.continue_session) args.push('-c');
@@ -21,66 +21,107 @@ function mimoRun(prompt, opts = {}) {
     const proc = spawn('mimo', args, { shell: true, env: { ...process.env } });
     proc.stdin.end();
 
-    let out = '';
-    let err = '';
+    let stdout = '';
+    let stderr = '';
     const events = [];
 
-    proc.stdout.on('data', d => {
-      out += d;
-      d.toString().split(/\r?\n/).filter(Boolean).forEach(line => {
-        try { events.push(JSON.parse(line)); } catch {}
-      });
+    proc.stdout.on('data', (chunk) => {
+      stdout += chunk;
+      chunk
+        .toString()
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .forEach((line) => {
+          try { events.push(JSON.parse(line)); } catch {}
+        });
     });
-    proc.stderr.on('data', d => { err += d; });
 
-    const timer = setTimeout(() => { proc.kill(); reject(new Error('timeout')); }, 120000);
-    proc.on('close', code => {
+    proc.stderr.on('data', (chunk) => {
+      stderr += chunk;
+    });
+
+    const timer = setTimeout(() => {
+      proc.kill();
+      reject(new Error('Request timed out after 120s'));
+    }, 120_000);
+
+    proc.on('close', (code) => {
       clearTimeout(timer);
-      const text = events.filter(e => e.type === 'text' && e.part?.text).map(e => e.part.text).join('\n');
-      resolve({ text: text || out.trim(), exitCode: code, stderr: err.trim(), events });
+      const text = events
+        .filter((e) => e.type === 'text' && e.part?.text)
+        .map((e) => e.part.text)
+        .join('\n');
+      resolve({ text: text || stdout.trim(), exitCode: code, stderr: stderr.trim(), events });
     });
-    proc.on('error', e => { clearTimeout(timer); reject(e); });
-  });
-}
 
-app.get('/', (req, res) => {
+    proc.on('error', (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+  });
+
+const parseModels = (raw) =>
+  raw
+    .trim()
+    .split(/\r?\n/)
+    .filter(Boolean);
+
+// ── Routes ──────────────────────────────────────────────────────────────────
+
+app.get('/', (_req, res) => {
   res.json({
     name: 'MiMo Code API',
+    version: '1.0.0',
     model: MODEL,
-    usage: {
-      'POST /chat': { body: { prompt: 'string (required)', session: 'string?', dangerously_skip_permissions: 'boolean?' } },
-      'POST /chat/stream': 'SSE — Server-Sent Events',
+    endpoints: {
+      'POST /chat': 'Send a prompt, receive a response',
+      'POST /chat/stream': 'SSE streaming',
       'GET /models': 'List available models',
-      'GET /health': 'Health check'
+      'GET /health': 'Health check',
     },
-    example: 'curl -X POST http://localhost:' + PORT + '/chat -H "Content-Type: application/json" -d \'{"prompt":"Hello"}\''
   });
 });
 
-app.get('/health', (req, res) => res.json({ ok: true, model: MODEL, port: PORT }));
+app.get('/health', (_req, res) => {
+  res.json({ status: 'ok', model: MODEL, uptime: process.uptime() });
+});
 
-app.get('/models', (req, res) => {
-  exec('mimo models', (e, stdout) => {
-    if (e) return res.status(500).json({ error: e.message });
-    res.json({ models: stdout.trim().split(/\r?\n/).filter(Boolean) });
+app.get('/models', (_req, res) => {
+  exec('mimo models', (err, stdout) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ models: parseModels(stdout) });
   });
 });
 
 app.post('/chat', async (req, res) => {
   try {
     const { prompt, session, dangerously_skip_permissions } = req.body;
-    if (!prompt) return res.status(400).json({ error: 'prompt is required' });
-    const r = await mimoRun(prompt, { session, dangerously_skip_permissions });
-    res.json({ id: uuidv4(), model: MODEL, response: r.text, exitCode: r.exitCode, stderr: r.stderr || undefined });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
+
+    if (!prompt || typeof prompt !== 'string') {
+      return res.status(400).json({ error: '`prompt` (string) is required' });
+    }
+
+    const result = await mimoRun(prompt, { session, dangerously_skip_permissions });
+
+    res.json({
+      id: uuidv4(),
+      model: MODEL,
+      response: result.text,
+      exitCode: result.exitCode,
+      ...(result.stderr && { stderr: result.stderr }),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
 app.post('/chat/stream', async (req, res) => {
   try {
     const { prompt, session, dangerously_skip_permissions } = req.body;
-    if (!prompt) return res.status(400).json({ error: 'prompt is required' });
+
+    if (!prompt || typeof prompt !== 'string') {
+      return res.status(400).json({ error: '`prompt` (string) is required' });
+    }
 
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -95,35 +136,42 @@ app.post('/chat/stream', async (req, res) => {
     const proc = spawn('mimo', args, { shell: true, env: { ...process.env } });
     proc.stdin.end();
 
-    let buf = '';
-    const onData = d => {
-      buf += d;
-      const lines = buf.split(/\r?\n/);
-      buf = lines.pop() || '';
-      for (const l of lines) {
-        const t = l.trim();
-        if (t) try { res.write(`data: ${t}\n\n`); } catch {}
+    let buffer = '';
+    const send = (data) => {
+      buffer += data;
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed) {
+          try { res.write(`data: ${trimmed}\n\n`); } catch {}
+        }
       }
     };
 
-    proc.stdout.on('data', onData);
-    proc.stderr.on('data', onData);
+    proc.stdout.on('data', send);
+    proc.stderr.on('data', send);
 
-    proc.on('close', code => {
-      if (buf.trim()) res.write(`data: ${buf.trim()}\n\n`);
+    proc.on('close', (code) => {
+      if (buffer.trim()) res.write(`data: ${buffer.trim()}\n\n`);
       res.write(`data: ${JSON.stringify({ type: 'done', exitCode: code })}\n\n`);
       res.end();
     });
 
-    proc.on('error', err => {
+    proc.on('error', (err) => {
       res.write(`data: ${JSON.stringify({ type: 'error', message: err.message })}\n\n`);
       res.end();
     });
 
     req.on('close', () => proc.kill());
-  } catch (e) {
-    res.status(500).json({ error: e.message });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
-app.listen(PORT, () => console.log(`MiMo API → http://localhost:${PORT}  model=${MODEL}`));
+// ── Start ───────────────────────────────────────────────────────────────────
+
+app.listen(PORT, () => {
+  console.log(`[mimo-api] listening on http://localhost:${PORT}`);
+  console.log(`[mimo-api] model: ${MODEL}`);
+});
